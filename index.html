@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" initial-scale="1.0" />
+    <title>Audio Test</title>
+
+    <link rel="stylesheet" href="main.css" />
+    <script src="https://cdn.auth0.com/js/auth0/9.16/auth0.min.js"></script>
+    <script src="https://cdn.socket.io/4.2.0/socket.io.min.js"></script>
+  </head>
+  <body>
+    <div class="container">
+      <div class="ball-enclosure">
+        <div class="ball"></div>
+      </div>
+
+      <div class="input-collector">
+        <div class="inputs">
+          <select id="languageSelection">
+            <option value="en" selected>English</option>
+            <option value="ja">Japanese</option>
+            <option value="hi">Hindi</option>
+            <option value="pl">Polish</option>
+          </select>
+
+          <button id="toggleWebSocket" onclick="toggleWebSocket()">
+            Start Speaking
+          </button>
+        </div>
+
+        <h1 id="webSocketStatus" class="token">
+          Click on the Start Button to start speaking!
+        </h1>
+      </div>
+    </div>
+
+    <script>
+      var tenantId = "";
+      var ws;
+      var mediaRecorder;
+      var packetsSent = 0;
+      var isSynthesisEnd = false;
+      var currentResultID;
+      let audioContext;
+      let nextStartTime;
+      let audioPlaying = false;
+      let audioQueue = [];
+
+      function toggleWebSocket() {
+        if (ws && ws.connected) {
+          ws.disconnect();
+          if (audioContext) {
+            audioContext.close();
+          }
+        } else {
+          // Create a new AudioContext
+          audioContext = new (window.AudioContext ||
+            window.webkitAudioContext)();
+          nextStartTime = audioContext.currentTime;
+          openWebSocket();
+        }
+      }
+
+      function openWebSocket() {
+        let language = document.getElementById("languageSelection").value;
+        console.log("Selected language:", language);
+        ws = io(
+          "ws://localhost:5050/?language=" + encodeURIComponent(language),
+          {
+            query: "X-API-KEY=12345",
+          }
+        );
+
+        ws.on("connect", function () {
+          document.getElementById("toggleWebSocket").textContent =
+            "Stop Speaking";
+          startRecording();
+        });
+
+        ws.on("disconnect", function () {
+          document.getElementById("toggleWebSocket").textContent =
+            "Start Speaking";
+          stopRecording();
+          packetsSent = 0;
+        });
+
+        ws.on("connect_error", function (error) {
+          document.getElementById("webSocketStatus").textContent =
+            "WebSocket encountered error: " + error;
+        });
+
+        ws.on("transcript", function (event) {
+          console.log("Transcript received:", event);
+          document.getElementById("webSocketStatus").textContent = event;
+        });
+
+        ws.on("clear", function () {
+          console.log("Clear received");
+          audioQueue = [];
+          ws.emit("message", JSON.stringify({ event: "Mark" }));
+          console.log(
+            "Audio queue cleared & mark sent for interruption acknowledgment."
+          );
+        });
+
+        ws.on("synthesis", function (event) {
+          console.log("Synthesis received:", event);
+          // Parse the JSON string and decode the base64 payload
+          let resultId = event.synthesis.resultId;
+          let eventType = event.event;
+
+          if (eventType === "synthesis_end") {
+            isSynthesisEnd = true;
+            console.log("Synthesis end received for resultId:", resultId);
+            return;
+          }
+
+          let audioData;
+          try {
+            audioData = atob(event.synthesis.payload);
+          } catch (error) {
+            console.error("Error parsing synthesis event:", error);
+          }
+
+          // Calculate the length of the ArrayBuffer
+          let bufferLength = Math.floor(audioData.length / 4) * 4;
+
+          // Convert the decoded base64 string to an ArrayBuffer
+          let arrayBuffer = new ArrayBuffer(bufferLength);
+          let view = new DataView(arrayBuffer);
+          for (let i = 0; i < bufferLength; i++) {
+            view.setUint8(i, audioData.charCodeAt(i));
+          }
+
+          // Push the ArrayBuffer to the queue
+          audioQueue.push(arrayBuffer);
+          // Try to play the audio in the queue
+          handlePlaying(resultId);
+        });
+      }
+
+      async function handlePlaying(resultId) {
+        if (audioPlaying || !audioQueue.length) return; // If audio is already playing or queue is empty, do nothing
+        audioPlaying = true; // Set flag to true
+
+        let audioData = audioQueue.shift();
+        if (audioData instanceof ArrayBuffer) {
+          // Decode the audio data into an AudioBuffer
+          let audioBuffer = await audioContext.decodeAudioData(audioData);
+          let source = audioContext.createBufferSource();
+          source.buffer = audioBuffer;
+
+          // Connect the source to the context's destination (the speakers)
+          source.connect(audioContext.destination);
+
+          // Start the source now
+          source.start(audioContext.currentTime);
+
+          // When the source ends, play the next audio chunk
+          source.onended = () => {
+            audioPlaying = false; // Reset flag when audio ends
+            handlePlaying(resultId); // Try to play next audio chunk in the queue
+            if (audioQueue.length === 0 && isSynthesisEnd) {
+              isSynthesisEnd = false;
+              ws.emit("message", JSON.stringify({ event: "Mark" }));
+            }
+          };
+        } else {
+          audioPlaying = false; // Reset flag when no audio data
+        }
+      }
+
+      function startRecording() {
+        const audioContext = new AudioContext();
+        console.log(audioContext.sampleRate);
+
+        navigator.mediaDevices
+          .getUserMedia({ audio: true })
+          .then((stream) => {
+            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder.start(200);
+
+            mediaRecorder.ondataavailable = function (e) {
+              console.log("Data available:", e.data);
+              if (ws.connected) {
+                ws.emit("message", e.data);
+                packetsSent++;
+              }
+            };
+          })
+          .catch((error) => {
+            console.error("Error getting audio stream:", error);
+          });
+      }
+
+      function stopRecording() {
+        if (mediaRecorder) {
+          mediaRecorder.stop();
+          audioQueue = [];
+        }
+      }
+    </script>
+  </body>
+</html>
