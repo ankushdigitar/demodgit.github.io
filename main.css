@@ -27,10 +27,8 @@ body {
   width: 350px;
   height: 350px;
   border-radius: 50%;
-  box-shadow: inset 0 0 50px #fff, inset 20px 0 60px #ee82ee,
-    inset -20px 0 60px #0ff, inset 20px 0 300px #ee82ee,
-    inset -20px 0 300px #0ff, 0 0 5px #fff, -10px 0 60px #ee82ee,
-    10px 0 60px #0ff;
+  box-shadow: inset 0 0 50px #fff, inset 20px 0 60px #ee82ee, inset -20px 0 60px #0ff, inset 20px 0 300px #ee82ee, inset -20px 0 300px #0ff,
+    0 0 5px #fff, -10px 0 60px #ee82ee, 10px 0 60px #0ff;
   animation: load 2s infinite;
   margin: 100px;
 }
@@ -54,7 +52,9 @@ body {
   color: #fff;
   margin-top: 40px;
 }
-#languageSelection {
+#languageSelection,
+#speechProvider,
+#rag {
   padding: 10px; /* Add this line */
   font-size: 1.1em; /* Add this line */
   transition: all 0.3s ease;
@@ -63,7 +63,7 @@ body {
 }
 
 #toggleWebSocket {
-  background-color: #2c3e50; /* Add this line */
+  background-color: #04602f; /* Add this line */
   color: #fff; /* Add this line */
   padding: 10px; /* Add this line */
   font-size: 1.1em; /* Add this line */

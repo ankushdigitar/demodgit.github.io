@@ -17,6 +17,16 @@
 
       <div class="input-collector">
         <div class="inputs">
+          <select id="speechProvider">
+            <option value="MICROSOFT_SPEECH" selected>Microsoft Text to Speech</option>
+            <option value="ELEVEN_LABS">Eleven Labs</option>
+          </select>
+
+          <select id="rag">
+            <option value="false" selected>Speak without document</option>
+            <option value="true">Speak with document</option>
+          </select>
+
           <select id="languageSelection">
             <option value="en" selected>English</option>
             <option value="ja">Japanese</option>
@@ -24,14 +34,10 @@
             <option value="pl">Polish</option>
           </select>
 
-          <button id="toggleWebSocket" onclick="toggleWebSocket()">
-            Start Speaking
-          </button>
+          <button id="toggleWebSocket" onclick="toggleWebSocket()">START SPEAKING</button>
         </div>
 
-        <h1 id="webSocketStatus" class="token">
-          Click on the Start Button to start speaking!
-        </h1>
+        <h1 id="webSocketStatus" class="token">Click on the Start Button to start speaking!</h1>
       </div>
     </div>
 
@@ -55,39 +61,59 @@
           }
         } else {
           // Create a new AudioContext
-          audioContext = new (window.AudioContext ||
-            window.webkitAudioContext)();
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
           nextStartTime = audioContext.currentTime;
           openWebSocket();
         }
       }
 
       function openWebSocket() {
+        let urlParams = new URLSearchParams(window.location.search);
+        let depUrl = urlParams.get("depUrl");
+
+        if (!depUrl) {
+          console.log("depUrl is not provided. Exiting...");
+          return;
+        }
+
         let language = document.getElementById("languageSelection").value;
-        console.log("Selected language:", language);
-        ws = io(
-          "ws://localhost:5050/?language=" + encodeURIComponent(language),
-          {
-            query: "X-API-KEY=12345",
-          }
-        );
+        let rag = document.getElementById("rag").value;
+        let provider = document.getElementById("speechProvider").value;
+        let remoteUrl =
+          depUrl +
+          "?language=" +
+          encodeURIComponent(language) +
+          "&rag=" +
+          encodeURIComponent(rag) +
+          "&provider=" +
+          encodeURIComponent(provider);
+
+        ws = io(remoteUrl, {
+          query: "X-API-KEY=12345",
+        });
+
+        console.log("WebSocket URL:", remoteUrl);
 
         ws.on("connect", function () {
-          document.getElementById("toggleWebSocket").textContent =
-            "Stop Speaking";
+          let button = document.getElementById("toggleWebSocket");
+          button.textContent = "STOP SPEAKING";
+          button.style.backgroundColor = "red";
+          button.style.color = "white";
+          document.getElementById("webSocketStatus").textContent = "";
           startRecording();
         });
 
         ws.on("disconnect", function () {
-          document.getElementById("toggleWebSocket").textContent =
-            "Start Speaking";
+          let button = document.getElementById("toggleWebSocket");
+          button.textContent = "START SPEAKING";
+          button.style.backgroundColor = "#2c3e50";
+          button.style.color = "#fff";
           stopRecording();
           packetsSent = 0;
         });
 
         ws.on("connect_error", function (error) {
-          document.getElementById("webSocketStatus").textContent =
-            "WebSocket encountered error: " + error;
+          document.getElementById("webSocketStatus").textContent = "WebSocket encountered error: " + error;
         });
 
         ws.on("transcript", function (event) {
@@ -99,9 +125,7 @@
           console.log("Clear received");
           audioQueue = [];
           ws.emit("message", JSON.stringify({ event: "Mark" }));
-          console.log(
-            "Audio queue cleared & mark sent for interruption acknowledgment."
-          );
+          console.log("Audio queue cleared & mark sent for interruption acknowledgment.");
         });
 
         ws.on("synthesis", function (event) {
