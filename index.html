@@ -8,7 +8,6 @@
     <link rel="stylesheet" href="main.css" />
     <script src="https://cdn.auth0.com/js/auth0/9.16/auth0.min.js"></script>
     <script src="https://cdn.socket.io/4.2.0/socket.io.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/hark/1.2.0/hark.min.js"></script>
   </head>
   <body>
     <div class="container">
@@ -18,6 +17,11 @@
 
       <div class="input-collector">
         <div class="inputs">
+          <select id="speechProvider">
+            <option value="MICROSOFT_SPEECH" selected>Microsoft Text to Speech</option>
+            <option value="ELEVEN_LABS">Eleven Labs</option>
+          </select>
+
           <select id="rag">
             <option value="false" selected>Speak without document</option>
             <option value="true">Speak with document</option>
@@ -50,8 +54,8 @@
       let audioQueue = [];
 
       function toggleWebSocket() {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.close();
+        if (ws && ws.connected) {
+          ws.disconnect();
           if (audioContext) {
             audioContext.close();
           }
@@ -74,170 +78,90 @@
 
         let language = document.getElementById("languageSelection").value;
         let rag = document.getElementById("rag").value;
-        let encoding = "opuscat";
-        let sampleRate = 8000;
+        let provider = document.getElementById("speechProvider").value;
         let remoteUrl =
           depUrl +
           "?language=" +
           encodeURIComponent(language) +
           "&rag=" +
           encodeURIComponent(rag) +
-          "&encoding=" +
-          encodeURIComponent(encoding) +
-          "&sample_rate=" +
-          encodeURIComponent(sampleRate);
+          "&provider=" +
+          encodeURIComponent(provider);
 
-        ws = new WebSocket(remoteUrl);
+        ws = io(remoteUrl, {
+          query: "X-API-KEY=12345",
+        });
 
         console.log("WebSocket URL:", remoteUrl);
 
-        ws.onopen = function () {
+        ws.on("connect", function () {
           let button = document.getElementById("toggleWebSocket");
           button.textContent = "STOP SPEAKING";
           button.style.backgroundColor = "red";
           button.style.color = "white";
           document.getElementById("webSocketStatus").textContent = "";
           startRecording();
-        };
+        });
 
-        ws.onclose = function () {
+        ws.on("disconnect", function () {
           let button = document.getElementById("toggleWebSocket");
           button.textContent = "START SPEAKING";
           button.style.backgroundColor = "#2c3e50";
           button.style.color = "#fff";
           stopRecording();
           packetsSent = 0;
-        };
+        });
 
-        ws.onerror = function (error) {
+        ws.on("connect_error", function (error) {
           document.getElementById("webSocketStatus").textContent = "WebSocket encountered error: " + error;
-          console.log("WebSocket encountered error:", error);
-        };
+        });
 
-        ws.onmessage = function (event) {
-          const message = JSON.parse(event.data);
-          if (message.type === "transcript") {
-            console.log("Transcript received:", event);
-            document.getElementById("webSocketStatus").textContent = event;
-          } else if (message.type === "clear") {
-            console.log("Clear received");
-            audioQueue = [];
-            ws.send(JSON.stringify({ event: "Mark" }));
-            console.log("Audio queue cleared & mark sent for interruption acknowledgment.");
-          } else if (message.type === "synthesis") {
-            console.log("Synthesis received:", message);
-            // Parse the JSON string and decode the base64 payload
-            let resultId = message.synthesis.resultId;
-            let eventType = message.event;
+        ws.on("transcript", function (event) {
+          console.log("Transcript received:", event);
+          document.getElementById("webSocketStatus").textContent = event;
+        });
 
-            if (eventType === "synthesis_end") {
-              isSynthesisEnd = true;
-              console.log("Synthesis end received for resultId:", resultId);
-              return;
-            }
+        ws.on("clear", function () {
+          console.log("Clear received");
+          audioQueue = [];
+          ws.emit("message", JSON.stringify({ event: "Mark" }));
+          console.log("Audio queue cleared & mark sent for interruption acknowledgment.");
+        });
 
-            let audioData;
-            try {
-              audioData = atob(message.synthesis.payload);
-            } catch (error) {
-              console.error("Error parsing synthesis event:", error);
-            }
+        ws.on("synthesis", function (event) {
+          console.log("Synthesis received:", event);
+          // Parse the JSON string and decode the base64 payload
+          let resultId = event.synthesis.resultId;
+          let eventType = event.event;
 
-            // Calculate the length of the ArrayBuffer
-            let bufferLength = Math.floor(audioData.length / 4) * 4;
-
-            // Convert the decoded base64 string to an ArrayBuffer
-            let arrayBuffer = new ArrayBuffer(bufferLength);
-            let view = new DataView(arrayBuffer);
-            for (let i = 0; i < bufferLength; i++) {
-              view.setUint8(i, audioData.charCodeAt(i));
-            }
-
-            // Push the ArrayBuffer to the queue
-            audioQueue.push(arrayBuffer);
-            // Try to play the audio in the queue
-            handlePlaying(resultId);
+          if (eventType === "synthesis_end") {
+            isSynthesisEnd = true;
+            console.log("Synthesis end received for resultId:", resultId);
+            return;
           }
-        };
 
-        /*
-            ws = io(remoteUrl, {
-              query: "X-API-KEY=12345",
-              transports: ["websocket"],
-            });
+          let audioData;
+          try {
+            audioData = atob(event.synthesis.payload);
+          } catch (error) {
+            console.error("Error parsing synthesis event:", error);
+          }
 
-            console.log("WebSocket URL:", remoteUrl);
+          // Calculate the length of the ArrayBuffer
+          let bufferLength = Math.floor(audioData.length / 4) * 4;
 
+          // Convert the decoded base64 string to an ArrayBuffer
+          let arrayBuffer = new ArrayBuffer(bufferLength);
+          let view = new DataView(arrayBuffer);
+          for (let i = 0; i < bufferLength; i++) {
+            view.setUint8(i, audioData.charCodeAt(i));
+          }
 
-
-            ws.on("connect", function () {
-              let button = document.getElementById("toggleWebSocket");
-              button.textContent = "STOP SPEAKING";
-              button.style.backgroundColor = "red";
-              button.style.color = "white";
-              document.getElementById("webSocketStatus").textContent = "";
-              startRecording();
-            });
-
-            ws.on("disconnect", function () {
-              let button = document.getElementById("toggleWebSocket");
-              button.textContent = "START SPEAKING";
-              button.style.backgroundColor = "#2c3e50";
-              button.style.color = "#fff";
-              stopRecording();
-              packetsSent = 0;
-            });
-
-            ws.on("connect_error", function (error) {
-              document.getElementById("webSocketStatus").textContent = "WebSocket encountered error: " + error;
-            });
-
-            ws.on("transcript", function (event) {
-              console.log("Transcript received:", event);
-              document.getElementById("webSocketStatus").textContent = event;
-            });
-
-            ws.on("clear", function () {
-              console.log("Clear received");
-              audioQueue = [];
-              ws.emit("message", JSON.stringify({ event: "Mark" }));
-              console.log("Audio queue cleared & mark sent for interruption acknowledgment.");
-            });
-
-            ws.on("synthesis", function (event) {
-              console.log("Synthesis received:", event);
-              // Parse the JSON string and decode the base64 payload
-              let resultId = event.synthesis.resultId;
-              let eventType = event.event;
-
-              if (eventType === "synthesis_end") {
-                isSynthesisEnd = true;
-                console.log("Synthesis end received for resultId:", resultId);
-                return;
-              }
-
-              let audioData;
-              try {
-                audioData = atob(event.synthesis.payload);
-              } catch (error) {
-                console.error("Error parsing synthesis event:", error);
-              }
-
-              // Calculate the length of the ArrayBuffer
-              let bufferLength = Math.floor(audioData.length / 4) * 4;
-
-              // Convert the decoded base64 string to an ArrayBuffer
-              let arrayBuffer = new ArrayBuffer(bufferLength);
-              let view = new DataView(arrayBuffer);
-              for (let i = 0; i < bufferLength; i++) {
-                view.setUint8(i, audioData.charCodeAt(i));
-              }
-
-              // Push the ArrayBuffer to the queue
-              audioQueue.push(arrayBuffer);
-              // Try to play the audio in the queue
-              handlePlaying(resultId);
-            });*/
+          // Push the ArrayBuffer to the queue
+          audioQueue.push(arrayBuffer);
+          // Try to play the audio in the queue
+          handlePlaying(resultId);
+        });
       }
 
       async function handlePlaying(resultId) {
@@ -283,9 +207,8 @@
 
             mediaRecorder.ondataavailable = function (e) {
               console.log("Data available:", e.data);
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(e.data);
-                console.log("Packets would have been sent here:", packetsSent);
+              if (ws.connected) {
+                ws.emit("message", e.data);
                 packetsSent++;
               }
             };
